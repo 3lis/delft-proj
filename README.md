@@ -24,7 +24,7 @@ Download the [nuScenes](https://www.nuscenes.org/download) dataset (v1.0) and pl
 
 
 ### Execution
-The program can be run by executing the main script `src/exec_main.py `. The script supports the following command line arguments:
+Run the program by executing the main script `src/exec_main.py `. The script supports the following command line arguments:
 
 ```
 main_exec.py [-h] -c <file> -g <num> [-f <frac>] [-l <model>] [-Ttrs]
@@ -49,5 +49,5 @@ python src/main_exec.py -c net1 -g 0,1 -Ttssr
 Another example, this command loads an already trained model and executes all the test routines on CPU:
 
 ```
-python src/main_exec.py -l log/nicemodel.h5 -c net1 -g 0 -t
+python src/main_exec.py -l log/nicemodel.h5 -c nicemodel -g 0 -t
 ```
