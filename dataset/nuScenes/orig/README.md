@@ -1,0 +1,1 @@
+This folder should contain the original dataset (v1.0), which can be downloaded from [here](https://www.nuscenes.org/download).
