@@ -23,6 +23,10 @@ Download the [nuScenes](https://www.nuscenes.org/download) dataset (v1.0) and pl
 - generate the file `dataset/nuScenes/black_list.npy` indicating the nuScenes scenes where: there are no visible vehicles, the ego-vehicle is stationary, the environment conditions are bad (night/rain).
 
 
+### Configuration file
+The architecture of the model and the training parameters are passed to the program through a configuration file located in `src/cnfg`. The configuration is a python file containing a dict of the parameters.
+The complete list of parameters accepted by the program is commented in `src/load_cnfg.py`, which is the script reading the configuration files.
+ 
 ### Execution
 Run the program by executing the main script `src/exec_main.py `. The script supports the following command line arguments:
 
@@ -30,7 +34,7 @@ Run the program by executing the main script `src/exec_main.py `. The script sup
 main_exec.py [-h] -c <file> -g <num> [-f <frac>] [-l <model>] [-Ttrs]
 ```
 
-- `-c <file>`, `--config <file>` pass the configuration file (without path nor extension) describing the model architecture and training parameters.
+- `-c <file>`, `--config <file>` pass the configuration file (without path nor extension).
 - `-f <frac>`, `--fgpu <frac>` set the fraction of GPU memory to allocate *[default: 0.90]*.
 - `-g <num>`, `--gpu <num>` set the number of GPUs to use (0 if CPU) or list of GPU indices.
 - `-h`, `--help` show the help message with description of the arguments.
