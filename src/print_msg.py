@@ -14,6 +14,17 @@ import      sys
 import      inspect
 
 
+def print_flush( msg ):
+    """ ---------------------------------------------------------------------------------------------------------
+    Print an message and immediately flush the buffer to have the current stdout in the log
+
+    msg:        [str] message to print
+    --------------------------------------------------------------------------------------------------------- """
+    print( msg )
+    sys.stdout.flush()
+    
+    
+
 def print_err( msg, exit=True ):
     """ ---------------------------------------------------------------------------------------------------------
     Print an error message, including the file and line number where the print is called
