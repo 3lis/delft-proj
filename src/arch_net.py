@@ -20,7 +20,6 @@ import      random          as rn
 import      tensorflow      as tf
 from        keras           import backend  as K
 from        keras           import models, layers, utils, optimizers, losses
-from        keras           import backend      as K
 os.environ[ 'PYTHONHASHSEED' ] = str( SEED )
 np.random.seed( SEED )
 rn.seed( SEED )
@@ -90,7 +89,7 @@ class Encoder( object ):
         # the last 3D shape before flattening, filled by _define_layers()
         self.last_3d_shape      = None
 
-        # the keras.layers.Input object, filled by _define_encoder()
+        # the keras.layers.Input object, filled by define_model()
         self.input_layer        = None
 
         # the layout description must contain meaningful codes
@@ -106,14 +105,14 @@ class Encoder( object ):
 
         # create the network
         self.model_name     = 'encoder_{}'.format( self.net_indx )
-        self.model          = self._define_encoder()
+        self.model          = self.define_model()
 
         if summary:
             model_summary( self.model, fname=os.path.join( summary, self.model_name ) )
 
 
 
-    def _define_encoder( self ):
+    def define_model( self ):
         """ ---------------------------------------------------------------------------------------------------------
         Create the encoder model
 
@@ -128,7 +127,6 @@ class Encoder( object ):
                     name        = self.model_name
         )
 
-        # TODO multi gpu model
         return model
 
 
@@ -290,13 +288,13 @@ class Decoder( object ):
 
         # create the network
         self.model_name     = 'decoder_{}'.format( self.net_indx )
-        self.model          = self._define_decoder()
+        self.model          = self.define_model()
         if summary:
             model_summary( self.model, fname=os.path.join( summary, self.model_name ) )
 
 
 
-    def _define_decoder( self ):
+    def define_model( self ):
         """ ---------------------------------------------------------------------------------------------------------
         Create the decoder model
 
@@ -311,7 +309,6 @@ class Decoder( object ):
                     name        = self.model_name
         )
 
-        # TODO multi gpu model
         return model
 
 
@@ -396,7 +393,7 @@ class Decoder( object ):
                     name            = 'dnse_{}_{}'.format( self.net_indx, indx )
         )( x )
 
-        
+ 
 
 # ===================================================================================================================
 #
@@ -406,33 +403,38 @@ class Decoder( object ):
 
 class EncoderDecoder( object ):
 
-    def __init__( self, enc_kwargs, dec_kwargs, summary=False, **arch_kwargs ):
+    def __init__( self, enc_kwargs, dec_kwargs, summary=False, model_name="enc-dec", **arch_kwargs ):
         """ ---------------------------------------------------------------------------------------------------------
         Initialization
 
         summary:                [str] path where to save plot if you want a summary+plot of model, False otherwise
+        model_name:             [str] name of the model
 
         Expected parameters in arch_kwargs:
 
         arch_layout:            [str] code describing the order of layers in the model
         input_size:             [list] height, width, channels
+        output_size:            [list] height, width, channels
         optimiz:                [str] code of the optimizer
-        loss_func:              [str] code of the loss function
+        loss:                   [str] code of the loss function
         lrate:                  [float] learning rate
         --------------------------------------------------------------------------------------------------------- """
+        self.model_name     = model_name
         for key, value in arch_kwargs.items():
             setattr( self, key, value )
 
         assert layer_code[ 'STOP' ] in self.arch_layout
 
-        self.model_name     = "EncDec"
-        self.model          = self._define_model( enc_kwargs, dec_kwargs, summary=summary )
+        self.loss_func      = loss_code[ self.loss ]
+
+        self.model          = self.define_model( enc_kwargs, dec_kwargs, summary=summary )
         if summary:
             model_summary( self.model, fname=os.path.join( summary, self.model_name ) )
 
 
 
-    def _define_model( self, enc_kwargs, dec_kwargs, summary=False ):
+
+    def define_model( self, enc_kwargs, dec_kwargs, summary=False ):
         """ ---------------------------------------------------------------------------------------------------------
         Create the encoder-decoder model
 
@@ -463,8 +465,156 @@ class EncoderDecoder( object ):
                     name        = self.model_name
         )
 
-        # TODO multi gpu model
         return model
+
+        
+
+# ===================================================================================================================
+#
+#   Class for the generation of a variational encoding-decoding network
+#
+# ===================================================================================================================
+
+class VarEncoderDecoder( EncoderDecoder ):
+
+    def __init__( self, enc_kwargs, dec_kwargs, summary=False, model_name="var-enc-dec", **arch_kwargs ):
+        """ ---------------------------------------------------------------------------------------------------------
+        Initialization
+
+        summary:                [str] path where to save plot if you want a summary+plot of model, False otherwise
+        model_name:             [str] name of the model
+
+        Expected parameters in arch_kwargs:
+
+        arch_layout:            [str] code describing the order of layers in the model
+        input_size:             [list] height, width, channels
+        output_size:            [list] height, width, channels
+        optimiz:                [str] code of the optimizer
+        loss:                   [str] code of the loss function
+        lrate:                  [float] learning rate
+        --------------------------------------------------------------------------------------------------------- """
+        self.latent_size    = enc_kwargs[ 'enc_dnse_size' ][ -1 ]
+
+        super().__init__( enc_kwargs, dec_kwargs, summary=summary, model_name=model_name, **arch_kwargs )
+
+        self.kl_wght        = K.variable( self.kl_weight, name='KL_weight' )
+        self.loss_func      = _loss_with_kl( self.loss )
+
+
+
+    def define_model( self, enc_kwargs, dec_kwargs, summary=False ):
+        """ ---------------------------------------------------------------------------------------------------------
+        Create the encoder-decoder model
+
+        enc_kwargs:     [dict] parameters for Encoder
+        dec_kwargs:     [dict] parameters for Decoder
+        summary:        [str] path where to save plot if you want a summary+plot of model, False otherwise
+
+        return:         [keras.models.Model] model
+        --------------------------------------------------------------------------------------------------------- """
+        enc_kwargs[ 'net_indx' ]        = 1
+        dec_kwargs[ 'net_indx' ]        = 2
+        enc_kwargs[ 'arch_layout' ]     = self.arch_layout.split( layer_code[ 'STOP' ] )[ 0 ]
+        dec_kwargs[ 'arch_layout' ]     = self.arch_layout.split( layer_code[ 'STOP' ] )[ -1 ]
+        enc_kwargs[ 'input_size' ]      = self.input_size
+        dec_kwargs[ 'input_size' ]      = ( self.latent_size, )
+
+        # create Encoder and Decoder objects
+        enc                             = Encoder( summary=summary, **enc_kwargs )
+        dec                             = Decoder( summary=summary, **dec_kwargs )
+
+        # set network layers
+        x       = enc.model( enc.input_layer )
+
+        if TRAIN:
+            self.z_mean     = layers.Dense( self.latent_size, name='z_mean' )( x )
+            self.z_log_var  = layers.Dense( self.latent_size, name='z_log_var' )( x )
+            x               = layers.Lambda( self._latent_sampling, name='zeta' )( [ self.z_mean, self.z_log_var ] )
+        else:   # version of the model to be used for inference
+            x               = layers.Dense( self.latent_size, name='z_mean' )( x )
+
+        x       = dec.model( x )
+
+        # create model
+        model   = models.Model( 
+                    inputs      = enc.input_layer,
+                    outputs     = x,
+                    name        = self.model_name
+        )
+
+        return model
+
+
+
+    def _latent_sampling( self, args ):
+        """ ---------------------------------------------------------------------------------------------------------
+        Sample a point from a distribution defined by the arguments passed as input.
+        Apply the reparameterization trick using a small random epsilon.
+
+        args:           [list of tf.Tensor] mean and log of variance
+
+        return:         [tf.Tensor]
+        --------------------------------------------------------------------------------------------------------- """
+        z_mean, z_log_var   = args
+        epsilon             = K.random_normal(
+                shape   = ( K.shape( z_mean )[ 0 ], self.latent_size ),
+                mean    = 0.0,
+                stddev  = 1.0
+        )
+
+        # 0.5 is used to take square root of the variance, to obtain standard deviation
+        return z_mean + epsilon * K.exp( 0.5 * z_log_var )
+
+
+
+    def _loss_with_kl( self, loss ):
+        """ ---------------------------------------------------------------------------------------------------------
+        The function is composed of two parts
+            1. meausure of the error in the image reconstruction;
+            2. the Kullback–Leibler divergence measuring how good is the approximated
+               distribution computer by the encoder.
+
+        This function uses direct 'tf' calls to name elements, instead of 'K' calls, so that are visible
+        inside TensorBoard
+
+        loss:           [str] code of the loss function for the image reconstruction
+
+        return:         [function] loss function
+        --------------------------------------------------------------------------------------------------------- """
+        ls      = loss_code[ loss ]
+
+        # version of the model to be used for inference
+        if not TRAIN:       return ls
+
+        def loss_plus_kl( y_true, y_pred ):
+            y_true          = tf.reshape( y_true, [ -1 ], name="y_true_flat" )
+            y_pred          = tf.reshape( y_pred, [ -1 ], name="y_pred_flat" )
+
+            # loss meausuring the difference between the images
+            img_loss        = ls( y_true, y_pred )
+            img_loss        *= np.prod( self.output_size )
+            tf.summary.scalar( "img_loss", img_loss )
+
+            # Kullback–Leibler divergence
+            z_var           = tf.exp( self.z_log_var, name="z_var" )
+            z_mean_2        = tf.square( self.z_mean, name="z_mean_2" )
+            kl_loss         = - 0.5 * tf.reduce_sum(
+                    1 + self.z_log_var - z_mean_2 - z_var,
+                    axis        = -1,
+                    name        = "kl_loss_sum"
+            )
+
+            if LooseVersion( tf.VERSION ) > LooseVersion( '1.5' ):
+                kl_loss         = tf.reduce_mean( kl_loss, keepdims=False, name="kl_loss_mean" )
+            else:
+                kl_loss         = tf.reduce_mean( kl_loss, keep_dims=False, name="kl_loss_mean" )
+
+            # DEBUG
+            # img_loss   = tf.Print( img_loss, [ img_loss, kl_loss ] )
+
+            return img_loss + self.kl_wght * kl_loss
+
+        return loss_plus_kl
 
 
 
@@ -501,26 +651,27 @@ loss_code       = {                                     # one of the accepted lo
 }
 
 arch_code       = {                                     # one of the accepted architecture classes
-        'ENCDEC':       EncoderDecoder
+        'ENCDEC':       EncoderDecoder,
+        'VAR-ENCDEC':   VarEncoderDecoder
 }
 
 
 
 def model_summary( model, fname ):
-    """ -------------------------------------------------------------------------------------------------
+    """ -------------------------------------------------------------------------------------------------------------
     Print a summary of the model, and plot a graph of the model
 
     model:          [keras.engine.training.Model]
     fname:          [str] name of the output image with path but without extension
-    ------------------------------------------------------------------------------------------------- """
+    ------------------------------------------------------------------------------------------------------------- """
     utils.print_summary( model )
     fname   += '.png'
     utils.plot_model( model, to_file=fname, show_shapes=True, show_layer_names=True )
 
 
 
-def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, summary=False ):
-    """ -------------------------------------------------------------------------------------------------
+def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, n_gpu, summary=False ):
+    """ -------------------------------------------------------------------------------------------------------------
     Create the model
 
     code:           [str] code of the architecture class
@@ -528,15 +679,27 @@ def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, summary=False ):
     enc_kwargs:     [dict] parameters of the encoder part of the architecture
     dec_kwargs:     [dict] parameters of the decoder part of the architecture
     summary:        [str] path where to save plot if you want a summary+plot of model, False otherwise
+    n_gpu:          [int] number of GPUs used to train the model
 
     return:         the model object
-    ------------------------------------------------------------------------------------------------- """
-    nn      = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, **arch_kwargs )
+    ------------------------------------------------------------------------------------------------------------- """
+    if n_gpu <= 1:      # single GPU of CPU
+        nn  = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, **arch_kwargs )
+        nn.model.compile(
+                optimizer       = optimiz_code[ nn.optimiz ]( lr=nn.lrate ),
+                loss            = nn.loss_func,
+                loss_weights    = nn.loss_wght if hasattr( nn, 'loss_wght' ) else None
+        )
 
-    nn.model.compile(
-            optimizer       = optimiz_code[ nn.optimiz ]( lr=nn.lrate ),
-            loss            = loss_code[ nn.loss_func ],
-            loss_weights    = nn.loss_wght if hasattr( nn, 'loss_wght' ) else None
-    )
+    else:               # multi-GPU data parallelism
+        with tf.device( '/cpu:0' ):
+            nn  = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, **arch_kwargs )
+
+        nn.multi_model  = utils.multi_gpu_model( nn.model, gpus=n_gpu, cpu_merge=True, cpu_relocation=False )
+        nn.multi_model.compile(
+                optimizer       = optimiz_code[ nn.optimiz ]( lr=nn.lrate ),
+                loss            = nn.loss_func,
+                loss_weights    = nn.loss_wght if hasattr( nn, 'loss_wght' ) else None
+        )
 
     return nn
