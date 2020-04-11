@@ -39,6 +39,7 @@ class Config( object ):
     dataset_seq:            [int] max number of sequences to use in the dataset (if None use all) (DEFAULT=None)
     shuffle_batch_samples:  [bool] at each epoch, randomly distribute the samples in the batches (DEAFULT=True)
     shuffle_batch_order:    [bool] at the beginning of each epoch, shuffle the order of the batches (DEAFULT=True)
+    shuffle_partitions:     [bool] randomly partition the dataset in train/valid/test (DEAFULT=True)
     process_queue:          [int] max size for the generator queue (DEAFULT=10)
     process_multi:          [bool] use process-based threading (DEAFULT=False)
     process_workers:        [int] max number of processes (DEAFULT=1)
@@ -46,10 +47,13 @@ class Config( object ):
 
     arch_kwargs:          * [dict] general parameters of architecture, containing:
         arch_layout:          * [str] code describing the order of layers in the model (using 'layer_code' in arch_net.py)
-        input_size:           * [list] height, width, channels
         optimiz:              * [str] code of the optimizer (one of 'optimiz_code' in arch_net.py)
-        loss_func:            * [str] code of the loss function (one of 'loss_code' in arch_net.py)
+        loss:                 * [str] code of the loss function (one of 'loss_code' in arch_net.py)
         lrate:                * [float] learning rate
+        input_size:             [list] height, width, channels (DEFAULT is taken from 'class_code' in data_gen.py)
+        output_size:            [list] height, width, channels (DEFAULT is taken from 'class_code' in data_gen.py)
+
+        kl_weight:            * [float] weight of KL component in loss function (ONLY FOR VARIATIONAL MODELS)
 
     enc_kwargs:             [dict] parameters of encoder network, containing:
         conv_kernel_num:      * [list of int] number of kernels for each convolution
@@ -124,6 +128,7 @@ class Config( object ):
         if not hasattr( self, 'dataset_seq' ):              self.dataset_seq            = None
         if not hasattr( self, 'shuffle_batch_samples' ):    self.shuffle_batch_samples  = True
         if not hasattr( self, 'shuffle_batch_order' ):      self.shuffle_batch_order    = True
+        if not hasattr( self, 'shuffle_partitions' ):       self.shuffle_partitions     = True
         if not hasattr( self, 'process_queue' ):            self.process_queue          = 10
         if not hasattr( self, 'process_multi' ):            self.process_multi          = False
         if not hasattr( self, 'process_workers' ):          self.process_workers        = 1
@@ -134,13 +139,23 @@ class Config( object ):
         assert hasattr( self, 'arch_kwargs' )               and isinstance( self.arch_kwargs, dict )
 
         assert 'arch_layout' in self.arch_kwargs            and isinstance( self.arch_kwargs[ 'arch_layout' ], str )
-        assert 'input_size' in self.arch_kwargs             and len( self.arch_kwargs[ 'input_size' ] ) == 3
         assert 'optimiz' in self.arch_kwargs                and self.arch_kwargs[ 'optimiz' ] in optimiz_code
-        assert 'loss_func' in self.arch_kwargs              and self.arch_kwargs[ 'loss_func' ] in loss_code
+        assert 'loss' in self.arch_kwargs                   and self.arch_kwargs[ 'loss' ] in loss_code
         assert 'lrate' in self.arch_kwargs                  and isinstance( self.arch_kwargs[ 'lrate' ], float )
 
+        if 'input_size' not in self.arch_kwargs:
+            self.arch_kwargs[ 'input_size' ]                = class_code[ self.input_class ][ 'size' ]
+        if 'output_size' not in self.arch_kwargs:
+            self.arch_kwargs[ 'output_size' ]               = class_code[ self.target_class ][ 'size' ]
 
-        if self.arch_code == 'ENCDEC':
+        # case of VARIATIONAL model
+        if self.arch_code == 'VAR-ENCDEC':
+            assert 'kl_weight' in self.arch_kwargs          and isinstance( self.arch_kwargs[ 'kl_weight' ], float )
+            # TODO implement KL_increment
+
+
+        # case of model with ENCODERs and DECODERs
+        if self.arch_code in ( 'ENCDEC', 'VAR-ENCDEC' ):
             # TODO implement multi-enc
             # TODO implement multi-dec
             assert hasattr( self, 'enc_kwargs' )                and isinstance( self.arch_kwargs, dict )    
@@ -250,13 +265,15 @@ class Config( object ):
         return s
 
 
+# ===================================================================================================================
+
 
 def read_args():
-    """ -----------------------------------------------------------------------------------------------------
+    """ -------------------------------------------------------------------------------------------------------------
     Parse the command-line arguments defined by flags
     
     return:         [dict] key = name of parameter, value = value of parameter
-    ----------------------------------------------------------------------------------------------------- """
+    ------------------------------------------------------------------------------------------------------------- """
     parser      = ArgumentParser()
 
     parser.add_argument(
