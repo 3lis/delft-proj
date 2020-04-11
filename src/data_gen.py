@@ -35,8 +35,8 @@ DEBUG       = False
 # classes of data in nuScenes, with condition for selection and dimension of the data
 class_code          = {
         'ATT':  { 'cond' : lambda x: x.startswith( 'att_' ),    'size' : ( 900, 1600, 3 ) },    # attention map
-        'LOC':  { 'cond' : lambda x: x.startswith( 'loc_' ),    'size' : ( 900, 1600, 3 ) },    # location map
-        'FRM':  { 'cond' : lambda x: '__CAM_FRONT__' in x,      'size' : ( 900, 1600, 1 ) },    # full image frame
+        'LOC':  { 'cond' : lambda x: x.startswith( 'loc_' ),    'size' : ( 900, 1600, 1 ) },    # location map
+        'FRM':  { 'cond' : lambda x: '__CAM_FRONT__' in x,      'size' : ( 900, 1600, 3 ) },    # full image frame
         'OCC':  { 'cond' : lambda x: x.startswith( 'occ_' ),    'size' : ( 128,  128, 1 ) },    # occupancy grid
         'WRP':  { 'cond' : lambda x: x.startswith( 'wrp_' ),    'size' : ( 128,  128, 1 ) },    # warped occupancy grid
         'ODM':  { 'cond' : lambda x: x.startswith( 'odm_' ),    'size' : (   2, ) }             # odometry values
@@ -279,7 +279,8 @@ def retrieve_samples( src_dir, class_names, class_conds, black_list=None, n_seq=
     n_ids   = len( set_ids )
 
     # choose whether to shuffle the sample order
-    list_ids                = list( set_ids ) if shuffle else sorted( list( set_ids ) )
+    list_ids                = sorted( list( set_ids ) )
+    if shuffle:             rn.shuffle( list_ids )
 
     # partition list of sample IDs into the 3 sets for train/valid/test
     f_tr                    = int( frac_train * n_ids )
@@ -293,7 +294,8 @@ def retrieve_samples( src_dir, class_names, class_conds, black_list=None, n_seq=
 
 
 
-def build_generator( dataset_dir, input_class, target_class, batch_size, black_list=None, n_seq=None, shuffle=True ):
+def build_generator( dataset_dir, input_class, target_class, batch_size, black_list=None, n_seq=None,
+        shuffle_batch=True, shuffle_part=True ):
     """ -------------------------------------------------------------------------------------------------------------
     Build the generators producing batches of data for training and validation.
     The types (classes) of input and target data are passed by arguments.
@@ -304,7 +306,8 @@ def build_generator( dataset_dir, input_class, target_class, batch_size, black_l
     batch_size:     [int] batch size
     black_list:     [str] filename to black list file (if None use all)
     n_seq:          [int] number of sequence sub-folders to use in the dataset (if None use all)
-    shuffle:        [bool] if True, at each epoch, the samples are randomly distributed in the batches
+    shuffle_batch:  [bool] if True, at each epoch, the samples are randomly distributed in the batches
+    shuffle_part:   [bool] if True, the dataset is partitioned randomly in train/valid/test
 
     return:         [DataGenerator] 3 generators
     ------------------------------------------------------------------------------------------------------------- """
@@ -321,29 +324,19 @@ def build_generator( dataset_dir, input_class, target_class, batch_size, black_l
 
     assert set( cls ).issubset( class_code.keys() )
 
-    parts_dict, class_dicts     = retrieve_samples( dataset_dir, cls, cnd, black_list=black_list, n_seq=n_seq )
+    parts_dict, class_dicts     = retrieve_samples( dataset_dir, cls, cnd, black_list=black_list, n_seq=n_seq,
+            shuffle=shuffle_part )
+
     train_ids                   = parts_dict[ 'train' ]     # training sample IDs
     valid_ids                   = parts_dict[ 'valid' ]     # validation sample IDs
     test_ids                    = parts_dict[ 'test' ]      # test sample IDs
-    input_dicts                 = class_dicts[ :n_inp ]     # dicts with paths to files of input classes
-    target_dicts                = class_dicts[ n_inp: ]     # dicts with paths to files of target classes
-    input_sizes                 = [ class_code[ c ][ 'size' ] for c in input_class ]
-    target_sizes                = [ class_code[ c ][ 'size' ] for c in target_class ]
+    input_d                     = class_dicts[ :n_inp ]     # dicts with paths to files of input classes
+    target_d                    = class_dicts[ n_inp: ]     # dicts with paths to files of target classes
+    input_s                     = [ class_code[ c ][ 'size' ] for c in input_class ]
+    target_s                    = [ class_code[ c ][ 'size' ] for c in target_class ]
 
-    train_gen   = DataGenerator( train_ids, input_dicts, target_dicts, input_sizes, target_sizes, batch_size, shuffle )
-    valid_gen   = DataGenerator( valid_ids, input_dicts, target_dicts, input_sizes, target_sizes, batch_size, shuffle )
-    test_gen    = DataGenerator( test_ids, input_dicts, target_dicts, input_sizes, target_sizes, batch_size, shuffle )
+    train_gen   = DataGenerator( train_ids, input_d, target_d, input_s, target_s, batch_size, shuffle=shuffle_batch )
+    valid_gen   = DataGenerator( valid_ids, input_d, target_d, input_s, target_s, batch_size, shuffle=shuffle_batch )
+    test_gen    = DataGenerator( test_ids, input_d, target_d, input_s, target_s, batch_size, shuffle=shuffle_batch )
 
     return train_gen, valid_gen, test_gen
-
-
-
-"""
-gen     _               = build_generator( ( 'frm', 'odm' ), ( 'wrp', 'occ' ), n_seq=3 )
-train_gen, valid_gen, _ = gen
-x,y                     = train_gen[ 1 ]
-s1                      = y[ 0 ][ 0 ]
-s2                      = y[ 1 ][ 0 ]
-Image.fromarray( np.uint8( 255 * s1 ), 'RGB' ).save( 'i1.jpg' ) 
-Image.fromarray( np.uint8( 255 * s2[ :, :, 0 ] ) ).save( 'i2.png' ) 
-"""
