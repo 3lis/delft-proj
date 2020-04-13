@@ -26,6 +26,7 @@ tf.set_random_seed( SEED )
 import      sys
 import      time
 import      datetime
+import      pickle
 
 import      train_net       as tr
 import      test_net        as ts
@@ -33,7 +34,7 @@ import      arch_net        as ar
 import      load_cnfg       as lc
 import      load_model      as lm
 import      data_gen        as dg
-from        print_msg       import print_err, print_wrn
+from        print_msg       import print_err, print_wrn, print_flush
 
 
 FRMT                = "%y-%m-%d_%H-%M-%S"                           # datetime format for folder names
@@ -50,8 +51,8 @@ dir_cnfg            = 'cnfg'
 dir_plot            = 'plot'
 dir_test            = 'test'
 log_train           = "train.log"
-log_hist            = "hist.npy"
-log_cnfg            = "cnfg.npy"
+log_hist            = "hist.pickle"
+log_cnfg            = "cnfg.pickle"
 log_err             = "err.log"
 log_time            = "time.log"
 nn_best             = "nn_best.h5"
@@ -83,7 +84,8 @@ def init_cnfg():
     cnfg.load_from_file( **file_kwargs )
 
     # save the Config object
-    np.save( log_cnfg, cnfg )
+    with open( log_cnfg, 'wb') as f:
+        pickle.dump( cnfg, f )
 
 
 
@@ -167,6 +169,8 @@ def create_model():
             cnfg.arch_kwargs,
             cnfg.enc_kwargs,
             cnfg.dec_kwargs,
+            n_gpus,
+            batch   = cnfg.batch_size,
             summary = dir_plot
     )
 
@@ -196,18 +200,20 @@ def create_generators():
             cnfg.batch_size,
             black_list          = bl,
             n_seq               = cnfg.dataset_seq,
-            shuffle             = cnfg.shuffle_batch_samples
+            shuffle_part        = cnfg.shuffle_partitions,
+            shuffle_batch       = cnfg.shuffle_batch_samples
     )
 
     train_gen, valid_gen, test_gen          = generators
 
-    print( "\nTrain samples and batches:\t{}\t{}".format( train_gen.n_samples, train_gen.__len__() ) )
-    print( "Valid samples and batches:\t{}\t{}".format( valid_gen.n_samples, valid_gen.__len__() ) )
-    print( "Test samples and batches:\t{}\t{}".format( test_gen.n_samples, test_gen.__len__() ) )
-    print( "Total samples:\t\t\t{}".format( train_gen.n_samples + valid_gen.n_samples + test_gen.n_samples ) )
-    print( 65 * "_" +'\n' )
-
-    sys.stdout.flush()          # flush to have the current stdout in the log
+    frm1        = "{:<30}{:10d}\t{:10d}"
+    frm2        = "{:<30}{:10d}"
+    print( '\n' )
+    print( frm1.format( "Train samples and batches:", train_gen.n_samples, train_gen.__len__() ) )
+    print( frm1.format( "Valid samples and batches:", valid_gen.n_samples, valid_gen.__len__() ) )
+    print( frm1.format( "Test samples and batches:", test_gen.n_samples, test_gen.__len__() ) )
+    print( frm2.format( "Total samples:", train_gen.n_samples + valid_gen.n_samples + test_gen.n_samples ) )
+    print_flush( 65 * '_' + '\n' )
 
 
 
@@ -215,13 +221,14 @@ def train_model():
     """ -------------------------------------------------------------------------------------------------------------
     Train the model
     ------------------------------------------------------------------------------------------------------------- """
+    print_flush( "Now starting training...\n" )
+
     hist, train_time    = tr.train_model(
-            nn.model,
+            nn.multi_model if n_gpus > 1 else nn.model,
             nn_best,
             ( train_gen, valid_gen ),
             cnfg.n_epochs,
             cnfg.batch_size,
-            n_gpus,
             process_queue       = cnfg.process_queue,
             process_multi       = cnfg.process_multi,
             process_workers     = cnfg.process_workers,
@@ -230,10 +237,11 @@ def train_model():
     )
 
     # save model
-    nn.model.save_weights( nn_final )
+    nn.model.save_weights( nn_final )       # NOTE even in case of n_gpus>1, nn.model is the one to be saved
 
     # save and plot history
-    np.save( log_hist, hist )
+    with open( log_hist, 'wb') as f:
+        pickle.dump( hist.history, f )
     tr.plot_history( hist, os.path.join( dir_plot, 'loss' ) )
 
     # save duration of training
@@ -248,13 +256,21 @@ def test_model():
     """ -------------------------------------------------------------------------------------------------------------
     Test the model
     ------------------------------------------------------------------------------------------------------------- """
-    print( ">>> TEST: Predictions on a batch of data\n" )
-    ts.pred_from_batch( nn.model, test_gen, batch_indx=0, save=dir_test )
+    t_start     = datetime.datetime.now()
 
-    print( ">>> TEST: Evaluation stats\n" )
-    ts.eval_dataset( nn.model, test_gen, save=os.path.join( dir_test, "eval.txt" ) )
+    ar.TRAIN    = False                             # TODO TODO TODO check
+    ts.WARPED   = cnfg.target_class == 'WRP'        # TODO implement case of multi output class
 
-    sys.stdout.flush()          # flush to have the current stdout in the log
+    print_flush( "\n>>> TEST: Predictions on a batch of data\n" )
+    ts.pred_batch( nn.model, test_gen, batch_indx=0, save=dir_test )
+
+    print_flush( ">>> TEST: Evaluation stats\n" )
+    ts.eval_dataset( nn.model, test_gen, thresh_iou=0.5, thresh_err=0.7, save=os.path.join( dir_test, "eval.txt" ) )
+
+    # save duration of tests
+    t_end       = datetime.datetime.now()
+    with open( log_time, 'a' ) as f:
+        f.write( "Testing duration:\t\t{}\n".format( str( t_end - t_start ) ) )
 
     
 
@@ -294,4 +310,4 @@ if __name__ == '__main__':
     with open( log_time, 'a' ) as f:
         f.write( "Total duration:\t\t{}\n".format( str( t_end - t_start ) ) )
 
-    print( '~ End of execution! ~\n' )
+    print_flush( '~ End of execution! ~\n' )
