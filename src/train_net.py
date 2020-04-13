@@ -32,6 +32,10 @@ import  matplotlib
 matplotlib.use( 'agg' )     # to use matplotlib with unknown 'DISPLAY' var (when using remote display)
 from    matplotlib          import pyplot   as plt
 
+from        print_msg       import print_err, print_wrn, print_flush
+
+
+SHOWBEST    = False         # print the best result reached during training
 
 
 # ===================================================================================================================
@@ -54,7 +58,7 @@ def set_callback( filename, period=25 ):
     calls   = []
 
     # NOTE BE CAREFUL! Saving checkpoints is a CPU operation. If you do it too often, you cause a CPU bottleneck,
-    # and then the training gets super slow because the GPUs almost never work (case when Volatile GPU-Util = 0%)
+    # and then the training gets slower because the GPUs almost never work (case when Volatile GPU-Util = 0%)
 
     calls.append( callbacks.ModelCheckpoint(
             filename,
@@ -67,7 +71,7 @@ def set_callback( filename, period=25 ):
 
 
 
-def train_model( model, model_file, generators, n_epochs, batch_size, n_gpus, process_queue=10, process_multi=False,
+def train_model( model, model_file, generators, n_epochs, batch_size, process_queue=10, process_multi=False,
         process_workers=1, shuffle=True, chckpnt=0 ):
     """ -------------------------------------------------------------------------------------------------------------
     Training procedure
@@ -77,7 +81,6 @@ def train_model( model, model_file, generators, n_epochs, batch_size, n_gpus, pr
     generators:             [list of DataGenerator] train and valid generators
     n_epochs:               [int] number of epochs
     batch_size:             [int] batch size
-    n_gpus                  [int] number of GPUs (0 if CPU)
     process_queue:          [int] max size for the generator queue
     process_multi:          [bool] use process-based threading
     process_workers:        [int] max number of processes
@@ -90,10 +93,6 @@ def train_model( model, model_file, generators, n_epochs, batch_size, n_gpus, pr
     n_train, n_valid                = train_gen.n_samples, valid_gen.n_samples
     train_steps                     = ceil( n_train / batch_size )
     valid_steps                     = ceil( n_valid / batch_size )
-
-    # train using multiple GPUs
-    if n_gpus > 1:
-        model   = utils.multi_gpu_model( model, gpus=n_gpus )
 
     callbacks   = set_callback( model_file, period=chckpnt ) if chckpnt > 0 else None
 
@@ -114,10 +113,11 @@ def train_model( model, model_file, generators, n_epochs, batch_size, n_gpus, pr
     t_end       = datetime.datetime.now()                               # ending time of execution
 
     # best results in history
-    indx        = np.argmin( hist.history[ 'val_loss' ] )
-    best_loss   = hist.history[ 'loss' ][ indx ]
-    best_val    = hist.history[ 'val_loss' ][ indx ]
-    print( "Best model reached:\tloss: {:.3f}\tval_loss: {:.3f}\n".format( best_loss, best_val ) )
+    if SHOWBEST:
+        indx        = np.argmin( hist.history[ 'val_loss' ] )
+        best_loss   = hist.history[ 'loss' ][ indx ]
+        best_val    = hist.history[ 'val_loss' ][ indx ]
+        print_flush( "\nBest model reached:\tloss: {:.3f}\tval_loss: {:.3f}\n".format( best_loss, best_val ) )
 
     return hist, ( t_end - t_start )
 
