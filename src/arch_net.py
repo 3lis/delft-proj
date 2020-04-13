@@ -15,11 +15,12 @@
 # https://stackoverflow.com/a/52897289/13221459
 SEED = 1
 import      os
-import      numpy           as np
-import      random          as rn
-import      tensorflow      as tf
-from        keras           import backend  as K
-from        keras           import models, layers, utils, optimizers, losses
+import      numpy               as np
+import      random              as rn
+import      tensorflow          as tf
+from        keras               import backend  as K
+from        keras               import models, layers, utils, optimizers, losses
+from        distutils.version   import LooseVersion
 os.environ[ 'PYTHONHASHSEED' ] = str( SEED )
 np.random.seed( SEED )
 rn.seed( SEED )
@@ -27,12 +28,13 @@ tf.set_random_seed( SEED )
 # -------------------------------------------------------------------------------------------------------------------
 
 from        print_msg       import print_err, print_wrn
+from        extract_nu      import inverse_warp, inverse_grid
 
 
 TRAIN   = True                      # use to switch between the architecture for training or for inference
                                     # (in the variational case) -- it is set in main_exec.py
 
-# Other globals and functions are placed after the definition of the classes
+# NOTE Other globals and functions are placed after the definition of the classes
 
 #####################################################################################################################
 #
@@ -46,7 +48,7 @@ TRAIN   = True                      # use to switch between the architecture for
 
 # ===================================================================================================================
 #
-#   Class for the generation of an decoder network
+#   Class for the generation of an encoder network
 #
 # ===================================================================================================================
 
@@ -223,21 +225,23 @@ class Encoder( object ):
 
         return:         [tf.Tensor] layer output
         --------------------------------------------------------------------------------------------------------- """
-        if self.enc_dnse_dropout[ indx ] > 0:                               # dropout
-            x   = layers.Dropout( self.enc_dnse_dropout[ indx ] )( x )
-
-        return layers.Dense(                          
+        x   = layers.Dense(                          
                     self.enc_dnse_size[ indx ],                             # dimensionality of the output
                     activation      = self.enc_dnse_activation[ indx ],     # activation function
                     trainable       = self.enc_dnse_train[ indx ],
                     name            = 'dnse_{}_{}'.format( self.net_indx, indx )
         )( x )
 
+        if self.enc_dnse_dropout[ indx ] > 0:                               # dropout
+            x   = layers.Dropout( self.enc_dnse_dropout[ indx ] )( x )
+
+        return x
+
 
 
 # ===================================================================================================================
 #
-#   Class for the generation of an decoder network
+#   Class for the generation of a decoder network
 #
 # ===================================================================================================================
 
@@ -383,15 +387,17 @@ class Decoder( object ):
 
         return:         [tf.Tensor] layer output
         --------------------------------------------------------------------------------------------------------- """
-        if self.dec_dnse_dropout[ indx ] > 0:                                   # dropout
-            x   = layers.Dropout( self.dec_dnse_dropout[ indx ] )( x )
-
-        return layers.Dense(                          
+        x   = layers.Dense(                          
                     self.dec_dnse_size[ indx ],                                 # dimensionality of the output
                     activation      = self.dec_dnse_activation[ indx ],         # activation function
                     trainable       = self.dec_dnse_train[ indx ],
                     name            = 'dnse_{}_{}'.format( self.net_indx, indx )
         )( x )
+
+        if self.dec_dnse_dropout[ indx ] > 0:                                   # dropout
+            x   = layers.Dropout( self.dec_dnse_dropout[ indx ] )( x )
+
+        return x
 
  
 
@@ -403,10 +409,13 @@ class Decoder( object ):
 
 class EncoderDecoder( object ):
 
-    def __init__( self, enc_kwargs, dec_kwargs, summary=False, model_name="enc-dec", **arch_kwargs ):
+    def __init__( self, enc_kwargs, dec_kwargs, batch=None, summary=False, model_name="encdec", **arch_kwargs ):
         """ ---------------------------------------------------------------------------------------------------------
         Initialization
 
+        enc_kwargs:             [dict] agruments to build encoder
+        dec_kwargs:             [dict] agruments to build decoder
+        batch:                  [int] batch size
         summary:                [str] path where to save plot if you want a summary+plot of model, False otherwise
         model_name:             [str] name of the model
 
@@ -420,12 +429,20 @@ class EncoderDecoder( object ):
         lrate:                  [float] learning rate
         --------------------------------------------------------------------------------------------------------- """
         self.model_name     = model_name
+        if batch is not None:
+            self.batch      = batch
+
         for key, value in arch_kwargs.items():
             setattr( self, key, value )
 
         assert layer_code[ 'STOP' ] in self.arch_layout
 
-        self.loss_func      = loss_code[ self.loss ]
+        if self.loss == 'W-BXE':
+            dist_mtrx       = depth_weights( self.output_size, self.batch )
+            self.dist_mtrx  = K.variable( dist_mtrx, name='Distance_Matrix' )
+            self.loss_func  = self._loss_weighted( loss_code[ self.loss ] )
+        else:
+            self.loss_func  = loss_code[ self.loss ]
 
         self.model          = self.define_model( enc_kwargs, dec_kwargs, summary=summary )
         if summary:
@@ -467,7 +484,30 @@ class EncoderDecoder( object ):
 
         return model
 
+
+
+    def _loss_weighted( self, loss ):
+        """ ---------------------------------------------------------------------------------------------------------
+        inside TensorBoard
+
+        loss:           [str] code of the loss function for the image reconstruction:
+                        NOTE should be K. and NOT losses.
+
+        return:         [function] loss function
+        --------------------------------------------------------------------------------------------------------- """
+        def _w_loss( y_true, y_pred ):
+            img_loss        = loss( y_true, y_pred )
+            img_loss        *= self.dist_mtrx               # e magari fosse cosi` semplice!!
+            if LooseVersion( tf.VERSION ) > LooseVersion( '1.5' ):
+                dm_loss         = tf.reduce_mean( img_loss, keepdims=False, name="DM_loss_mean" )
+            else:
+                dm_loss         = tf.reduce_mean( img_loss, keep_dims=False, name="DM_loss_mean" )
+
+            return dm_loss
+
+        return _w_loss
         
+
 
 # ===================================================================================================================
 #
@@ -477,10 +517,13 @@ class EncoderDecoder( object ):
 
 class VarEncoderDecoder( EncoderDecoder ):
 
-    def __init__( self, enc_kwargs, dec_kwargs, summary=False, model_name="var-enc-dec", **arch_kwargs ):
+    def __init__( self, enc_kwargs, dec_kwargs, batch=None, summary=False, model_name="var-encdec", **arch_kwargs ):
         """ ---------------------------------------------------------------------------------------------------------
         Initialization
 
+        enc_kwargs:             [dict] agruments to build encoder
+        dec_kwargs:             [dict] agruments to build decoder
+        batch:                  [int] batch size
         summary:                [str] path where to save plot if you want a summary+plot of model, False otherwise
         model_name:             [str] name of the model
 
@@ -647,6 +690,7 @@ optimiz_code    = {                                     # one of the accepted ke
 loss_code       = {                                     # one of the accepted losses functions
         'MSE':          losses.mean_squared_error,
         'BXE':          losses.binary_crossentropy,
+        'W-BXE':        K.binary_crossentropy,          # case of loss weighted by distance matrix
         'CXE':          losses.categorical_crossentropy
 }
 
@@ -654,6 +698,39 @@ arch_code       = {                                     # one of the accepted ar
         'ENCDEC':       EncoderDecoder,
         'VAR-ENCDEC':   VarEncoderDecoder
 }
+
+
+
+def depth_weights( size, batch, warped=False ):
+    """ -------------------------------------------------------------------------------------------------------------
+    Construct a numpy array with shape as the target/predicted tensor, and as values weights
+    depending on the distance from the car camera
+    weights are normalized so that the mean of the array is 1.0
+    the basic weight matrix is replicated for each batch sample
+
+    size:           [tuple] size of the array in numpy convention (rows X cols)
+    warped:         [bool] apply warped transformation (very unlikely...)
+
+    return:         [np.ndarray]
+    ------------------------------------------------------------------------------------------------------------- """
+    inverse = inverse_warp if warped else inverse_grid
+    dist    = lambda x: np.linalg.norm( np.array( inverse( x ) ) )
+    p0      = ( size[ 1 ] / 2, size[ 0 ] - 1 )              # closest point
+    d0      = dist( p0 )                                    # closest distance
+    dm      = dist( ( 0, 0 ) )                              # farest distance
+    w       = np.ones( size )
+    for x in range( size[ 1 ] ):
+        for y in range( size[ 0 ] ):
+            d           = dist( ( x, y ) )
+            w[ y, x ]   = np.exp( - ( d - d0 ) / dm )
+
+    w       = w / w.mean()
+    shape   = ( batch, *size )
+    wtensor = np.ones( shape )
+    for i in range( batch ):
+        wtensor[ i ]    = w
+
+    return wtensor
 
 
 
@@ -670,7 +747,7 @@ def model_summary( model, fname ):
 
 
 
-def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, n_gpu, summary=False ):
+def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, n_gpu, batch=None, summary=False ):
     """ -------------------------------------------------------------------------------------------------------------
     Create the model
 
@@ -678,13 +755,14 @@ def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, n_gpu, summary=Fals
     arch_kwargs:    [dict] parameters of the overall architecture
     enc_kwargs:     [dict] parameters of the encoder part of the architecture
     dec_kwargs:     [dict] parameters of the decoder part of the architecture
-    summary:        [str] path where to save plot if you want a summary+plot of model, False otherwise
+    batch:          [int] batch size
     n_gpu:          [int] number of GPUs used to train the model
+    summary:        [str] path where to save plot if you want a summary+plot of model, False otherwise
 
     return:         the model object
     ------------------------------------------------------------------------------------------------------------- """
     if n_gpu <= 1:      # single GPU of CPU
-        nn  = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, **arch_kwargs )
+        nn  = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, batch=batch, **arch_kwargs )
         nn.model.compile(
                 optimizer       = optimiz_code[ nn.optimiz ]( lr=nn.lrate ),
                 loss            = nn.loss_func,
@@ -693,7 +771,7 @@ def create_model( code, arch_kwargs, enc_kwargs, dec_kwargs, n_gpu, summary=Fals
 
     else:               # multi-GPU data parallelism
         with tf.device( '/cpu:0' ):
-            nn  = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, **arch_kwargs )
+            nn  = arch_code[ code ]( enc_kwargs, dec_kwargs, summary=summary, batch=batch, **arch_kwargs )
 
         nn.multi_model  = utils.multi_gpu_model( nn.model, gpus=n_gpu, cpu_merge=True, cpu_relocation=False )
         nn.multi_model.compile(
