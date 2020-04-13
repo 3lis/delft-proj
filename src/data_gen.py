@@ -212,7 +212,9 @@ def get_list_sequence( src_dir, black_list=None, n_seq=None ):
     if isinstance( black_list, str ):
         # this dict is produced by check_seq() in extract_nu.py
         d           = np.load( black_list, allow_pickle=True ).item()
-        list_seqs   = [ k for k in sorted( d, key=d.get, reverse=True ) if d[ k ][ 1 ] == ( False, False, False ) ]
+        cond1       = lambda x: x[ 1 ] == ( False, False, False )                   # check score on blacklist
+        cond2       = lambda x: os.path.isdir( os.path.join( src_dir, x ) )         # check path existence
+        list_seqs   = [ k for k in sorted( d, key=d.get, reverse=True ) if cond1( d[ k ] ) and cond2( k ) ]
     else:
         list_seqs   = [ d for d in sorted( os.listdir( src_dir ) ) if os.path.isdir( os.path.join( src_dir, d ) ) ]
 
