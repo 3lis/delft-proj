@@ -41,9 +41,16 @@ import  numpy                           as np
 from    PIL                             import Image, ImageDraw, ImageFilter
 from    pyquaternion.quaternion         import Quaternion
 from    shapely.geometry                import MultiPoint, box
-from    nuscenes.nuscenes               import NuScenes
-from    nuscenes.utils.geometry_utils   import view_points
-from    nuscenes.can_bus.can_bus_api    import NuScenesCanBus
+
+# allow external programs to import modules from this file without NuScenes installation
+no_nuscene      = False
+try:
+    from    nuscenes.nuscenes               import NuScenes
+except ImportError:
+    no_nuscene  = True
+if not no_nuscene:
+    from    nuscenes.utils.geometry_utils   import view_points
+    from    nuscenes.can_bus.can_bus_api    import NuScenesCanBus
 
 
 # ===================================================================================================================
@@ -110,8 +117,8 @@ str_frm_odm     = "odm_{:04d}-{:03d}.npy"               # string format for odom
 # ===================================================================================================================
 
 # global instances of the NuScenes interfaces (NOTE it takes some time, but this is the first necessary operation)
-nu              = NuScenes( version=nuscenes_ver, dataroot=dir_orig, verbose=verbose )      # NuScenes database
-nc              = NuScenesCanBus( dataroot=dir_orig )                                       # NuScenes CAN bus
+#nu              = NuScenes( version=nuscenes_ver, dataroot=dir_orig, verbose=verbose )      # NuScenes database
+#nc              = NuScenesCanBus( dataroot=dir_orig )                                       # NuScenes CAN bus
 can_msg         = None                                  # CAN bus messages of an entire sequence
 
 
@@ -123,11 +130,25 @@ warp_scale      = warp_zmax / ( np.log( warp_zmax + warp_fact ) - warp_offs )
 warp_foreground = warp_scale * ( np.log( grid_foreground + warp_fact ) - warp_offs )
 
 
+
+def init_nu():
+    """ -------------------------------------------------------------------------------------------------------------
+    Initialize nuScene
+
+    return:         [tuple] NuScenes instance, NuScenesCanBus instance
+    ------------------------------------------------------------------------------------------------------------- """
+    nu              = NuScenes( version=nuscenes_ver, dataroot=dir_orig, verbose=verbose )      # NuScenes database
+    nc              = NuScenesCanBus( dataroot=dir_orig )                                       # NuScenes CAN bus
+    return nu, nc
+
+
+
 # ===================================================================================================================
 #   
 #   Check how many black images are contained in the sequences
 #
 #   - check_occ
+#   - check_descr
 #   - check_seq
 #
 # ===================================================================================================================
@@ -202,7 +223,97 @@ def check_seq( thresh=0.01 ):
 
 # ===================================================================================================================
 #
-#   Projection of 3D bounding boxes into camera view and bird's eye view
+#   Trasformations between occupancy grids and real world coordinates
+#   The formulas of the inverse transformations are computed in Wolfram Mathematica (see 'inv_trans.m')
+#
+#   - inverse_grid
+#   - forward_grid
+#
+#   - inverse_warp
+#   - forward_warp
+#
+# ===================================================================================================================
+
+def inverse_grid( point ):
+    """ -------------------------------------------------------------------------------------------------------------
+    Transform pixel coordinates of a standard occupancy grid into real world coordinates.
+
+    point:          [tuple] coordinates (X,Y) of point in the image [pixel]
+
+    return:         [tuple] coordinates (x,z) of the point in real space [m]
+    ------------------------------------------------------------------------------------------------------------- """
+    x       = 0.5 * grid_scale * ( 2 * point[ 0 ] - grid_size[ 0 ] )
+    z       = grid_foreground + grid_scale * ( grid_size[ 1 ] - point[ 1 ] )
+
+    return x, z
+
+
+
+def forward_grid( point ):
+    """ -------------------------------------------------------------------------------------------------------------
+    Transform real world coordinates into pixel coordinates of a standard occupancy grid.
+
+    point:          [tuple] coordinates (x,z) of the point in real space [m]
+
+    return:         [tuple] coordinates (X,Y) of point in the image [pixel]
+    ------------------------------------------------------------------------------------------------------------- """
+    x_, z       = point
+    y_off       = grid_foreground / grid_scale
+    x_offset    = grid_size[ 0 ] / 2
+    y_offset    = grid_size[ 1 ] + y_off
+    x           = x_offset + x / grid_scale
+    y           = y_offset - z / grid_scale
+    return x, y
+
+
+
+def inverse_warp( point ):
+    """ -------------------------------------------------------------------------------------------------------------
+    Transform pixel coordinates of an warped occupancy grid into real world coordinates.
+
+    point:          [tuple] coordinates (X,Y) of the pixel in the warped grid
+
+    return:         [tuple] coordinates (x,z) of the point in real space [m]
+    ------------------------------------------------------------------------------------------------------------- """
+    y_off   = warp_foreground / grid_scale
+
+    e       = -1 + point[ 1 ] / warp_size[ 1 ]
+    b       = warp_fact / ( warp_fact + grid_scale * warp_size[ 1 ] )
+    z       = np.power( b, e )
+    z       *= ( grid_foreground + warp_fact )
+    z       -= warp_fact
+
+    x       = z * ( point[ 0 ] - 0.5 * warp_size[ 0 ] )
+    x       *= np.log( warp_fact + grid_scale * warp_size[ 0 ] ) - warp_offs
+    x       /= warp_size[ 0 ] * ( np.log( warp_fact + z ) - warp_offs )
+
+    return x, z
+
+
+
+def forward_warp( point ):
+    """ -------------------------------------------------------------------------------------------------------------
+    Transform real world coordinates into pixel coordinates of a warped occupancy grid.
+
+    point:          [tuple] coordinates (x,z) of the point in real space [m]
+
+    return:         [tuple] coordinates (X,Y) of the pixel in the warped grid
+    ------------------------------------------------------------------------------------------------------------- """
+    x_, z_      = point
+    z           = warp_scale * ( np.log( z_ + warp_fact ) - warp_offs )
+    x           = x_ * z / z_
+    y_off       = warp_foreground / grid_scale
+    x_offset    = warp_size[ 0 ] / 2
+    y_offset    = warp_size[ 1 ] + y_off
+    x           = x_offset + x / grid_scale
+    y           = y_offset - z / grid_scale
+    return x, y
+
+
+
+# ===================================================================================================================
+#
+#   Projections of 3D bounding boxes into camera view and bird's eye view
 #
 #   - project_warp
 #   - project_bev
@@ -325,7 +436,7 @@ def compute_boxes( cam, ego, b ):
     return p_cam, p_bev
     
 
-# TODO arrived HERE
+# TODO review of comments arrived HERE
 
 # ===================================================================================================================
 #
@@ -366,6 +477,7 @@ def fill_grid( grid, points, log_grid=False ):
 
     # NOTE polygon() is able to handle the case some of the corners fall out of the image, so no need to check for that
     grid.polygon( xy, fill='white', outline=None )
+
 
 
 def mask_grid( grid, log_grid=True ):
@@ -641,7 +753,7 @@ def summary():
 #
 # ===================================================================================================================
 if __name__ == '__main__':
-
     if DO_EXEC:
-        print( "Starting: nuScenes" )
+        print( "Starting nuScenes extraction." )
+        nu, nc  = init_nu()
         track_nuscenes()
