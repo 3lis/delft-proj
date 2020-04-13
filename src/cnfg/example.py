@@ -18,7 +18,6 @@ kwargs      = {
         'target_class':     'WRP',                                  # [str] code of target class
         'dataset_seq':      50,                                     # [int] number of used sequences in dataset
         'black_list':       True,                                   # [bool] if True remove bad sequences in dataset
-        'process_workers':  200,                                    # [int] max number of processes
 
         # -------- ARCHITECTURE ----------------------------------- #
         'arch_kwargs':      {
@@ -26,7 +25,7 @@ kwargs      = {
                 'input_size':           ( 900, 1600, 3 ),           # [tuple] height, width, channels
                 'lrate':                1e-4,                       # [float] learning rate
                 'optimiz':              'ADAM',                     # [str] code of the optimizer
-                'loss_func':            'BXE'                       # [str] code of the loss function
+                'loss':                 'BXE'                       # [str] code of the loss function
         },
         # -------- ENCODER ---------------------------------------- #
         'enc_kwargs':       {
