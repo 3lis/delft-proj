@@ -257,7 +257,7 @@ def forward_grid( point ):
 
     return:         [tuple] coordinates (X,Y) of point in the image [pixel]
     ------------------------------------------------------------------------------------------------------------- """
-    x_, z       = point
+    x, z        = point
     y_off       = grid_foreground / grid_scale
     x_offset    = grid_size[ 0 ] / 2
     y_offset    = grid_size[ 1 ] + y_off
