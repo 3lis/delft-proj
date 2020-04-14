@@ -561,7 +561,7 @@ def prec_matches( matches ):
             # the match is good enough to be considered a TP
             if s > thresh_score:
                 prec[ dist_range ]  += 1                
-                prec[ 'ALL' ]       += 1
+                prec[ 'ALL' ]       = 1 if prec[ 'ALL' ] is np.NaN else prec[ 'ALL' ] + 1
 
         # divide the number of TP by the sum TP+FP (which is equal to the total number of predictions)
         prec[ dist_range ]  /= match_dict[ 'n_pred' ]
